@@ -1,0 +1,177 @@
+#!/bin/bash
+version="0.3"
+
+### init ###
+# error detection
+set -e
+error() {
+	echo "ERROR: something went wrong. abandon update." 
+	exit 1
+}
+trap "error" ERR
+
+# parse args
+help() {
+	echo "Usage releasePackUpdate.sh [OPTIONS]"
+	echo "Releases the current packwiz pack."
+	echo
+	echo "Single digit flags have to be passed seperately"
+	echo "  -h, --help               print this text and exit."
+	echo "  -v, --version            print version text and exit."
+	echo "  -c, --conf               specify a conf file (default: pack.conf)."
+	echo "      --backup             create backup according to conf file"
+	echo "      --cleanup            cleanup backupDestination according to conf file"
+	
+	exit 0	
+}
+
+confFile="~/.config/backupbash/config.conf"
+doBackup=0
+doCleanup=0
+verbose=0
+
+while [[ $# -gt 0 ]]; do
+	case $1 in
+		-c|--conf)
+			confFile=$2
+			shift
+			shift
+			;;
+		--backup)
+			doBackup=1
+			shift
+			;;
+		--cleanup)
+			doCleanup=1
+			shift
+			;;
+		-V|--verbose)
+			verbose=1
+			shift
+			;;
+		-v|--version)
+			echo "v${version}"
+			shift
+			;;
+		-h|--help)
+			help
+			shift
+			;;
+		-*|--*)
+			echo "Unknown option '$1'"
+			echo "Try '--help' for help"
+			exit 1
+			;;
+	esac
+done
+### functions ###
+getFile() {
+	local dir="$1"
+	local ending=""
+	
+	if [[ $2 == "new" ]]; then
+		ending="tail"
+	elif [[ $2 == "old" ]]; then
+		ending="head"
+	else
+		echo "ERROR: getFile: wring endings arg"
+		exit 1
+	fi
+	
+	latest_file=$(ls "$dir" | grep -E $grepPattern | sort -t '_' -k3,3n | $ending -1)
+	
+	if [ -n "$latest_file" ]; then
+		echo "$dir/$latest_file"
+	else
+		echo "false"
+	fi
+}
+getFileTimestamp() {
+	file=$1
+	if [[ $file =~ ^([^_]+)_([^_]+)_([0-9]+)$ ]]; then
+		echo ${BASH_REMATCH[3]}
+	else
+		echo "false"
+	fi
+}
+
+### runtime vars ###
+echo "Init"
+
+if [[ -e $confFile ]]; then
+	. $confFile
+else
+	echo "ERROR: Conf file not found: $confFile"
+	exit 1
+fi
+
+grepPattern="^[^_]+_[^_]+_[0-9]+$"
+timeString="$(date +'%Y-%m-%d_%H-%M-%S%z_%s')"
+currentTimestamp="$(date +'%s')"
+processBackupPath="${backupDestination}/processing_${timeString}"
+finalBackupPath="${backupDestination}/${timeString}"
+newestBackup="$(getFile $backupDestination 'new')"
+linkDest=""
+
+### prog start ###
+if [[ $doBackup == 1 ]]; then
+	if [ -d $processBackupPath ]; then
+		echo "Backup with same name is procesing atm. Please wait a second"
+		exit 1
+	elif [ -d $finalBackupPath ]; then
+		echo "Backup with same name already exists. Please wait a second"
+		exit 1
+	fi
+	
+	createBackup() {
+		local backupSource=$1
+		echo "Creating backup: $backupSource >> $backupPath"
+		
+		if [[ $newestBackup != "false" ]] && [[ -d "${newestBackup}/${backupSource}" ]]; then
+			linkDest="--link-dest=${newestBackup}/${backupSource}"
+		fi
+		
+		if [[ $verbose == 1 ]]; then
+			echo "Calling rsync: " "$rsyncArgs" "$linkDest" "$backupSource" "${processBackupPath}/${backupSource}"
+		fi
+		mkdir -p "${processBackupPath}/${backupSource}"
+		rsync "$rsyncArgs" $linkDest "$backupSource" "${processBackupPath}/${backupSource}"
+	}
+	
+	for backupSource in "${backupSources[@]}"; do
+		createBackup $backupSource
+	done
+	mv $processBackupPath $finalBackupPath
+fi
+
+if [[ $doCleanup == 1 ]]; then
+	echo "Doing cleanup"
+	if [[ $maxBackups != -1 ]]; then
+		backupOverflow=$(($(ls $backupDestination | grep -E $grepPattern | wc -l) - $maxBackups))
+		for ((counter=$backupOverflow; counter>0; counter--)); do
+			file=$(getFile $backupDestination "old")
+			
+			if (($(getFileTimestamp $file) < $currentTimestamp - $minBackupAge)); then
+				echo "Removing excess file: $file"
+				rm -r $file
+			else
+				break
+			fi
+		done
+	fi
+	
+	if [[ $maxBackupAge != -1 ]]; then
+		while true; do
+			file=$(getFile $backupDestination "old")
+			fileTimestamp=$(getFileTimestamp $file)
+			if [[ $file != "false" ]] && (( $fileTimestamp < $currentTimestamp - $maxBackupAge )); then
+				echo "Removing old file: $file"
+				rm -r $file
+			else
+				break
+			fi
+		done
+	fi
+fi
+
+echo "Done"
