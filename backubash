@@ -1,5 +1,5 @@
 #!/bin/bash
-version="0.5"
+version="1.0"
 
 ### init ###
 # error detection
@@ -89,9 +89,10 @@ getFile() {
 	fi
 }
 getFileTimestamp() {
-	file=$1
-	if [[ $file =~ ^([^_]+)_([0-9]+)$ ]]; then
-		echo ${BASH_REMATCH[2]}
+	file=${1##*/}
+	#echo $file
+	if [[ $file =~ ^([0-9]+)_([^_]+)$ ]]; then
+		echo ${BASH_REMATCH[1]}
 	else
 		echo "false"
 	fi
@@ -109,9 +110,9 @@ fi
 
 mkdir -p $backupDestination
 
-grepPattern="^[^_]+_[0-9]+$"
+grepPattern="^[0-9]+_[^_]+$"
 currentTimestamp="$(date +'%s')"
-timeString="$(date +'%Y-%m-%d-%H-%M-%S%z')"_$currentTimestamp
+timeString=${currentTimestamp}_"$(date +'%Y-%m-%d-%H-%M-%S%z')"
 processBackupPath="${backupDestination}/processing_${timeString}"
 finalBackupPath="${backupDestination}/${timeString}"
 newestBackup="$(getFile $backupDestination 'new')"
@@ -176,6 +177,7 @@ if [[ $doCleanup == 1 ]]; then
 				echo "Removing excess file: $file"
 				rm -r $file
 			else
+				echo "Skipping removal of exess files because minBackupAge is not reached"
 				break
 			fi
 		done
@@ -185,6 +187,7 @@ if [[ $doCleanup == 1 ]]; then
 		while true; do
 			file=$(getFile $backupDestination "old")
 			fileTimestamp=$(getFileTimestamp $file)
+			
 			if [[ $file != "false" ]] && (( $fileTimestamp < $currentTimestamp - $maxBackupAge )); then
 				echo "Removing old file: $file"
 				rm -r $file
